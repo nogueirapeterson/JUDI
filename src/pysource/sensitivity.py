@@ -1,7 +1,7 @@
 import numpy as np
 from sympy import cos, sin
 
-from devito import Eq
+from devito import Eq, Function
 from devito.tools import as_tuple
 
 from wave_utils import sub_time, freesurface
@@ -18,7 +18,8 @@ def func_name(freq=None, isic=False):
         return 'isic_freq' if isic else 'corr_freq'
 
 
-def grad_expr(gradm, u, v, model, w=None, freq=None, dft_sub=None, isic=False):
+def grad_expr(gradm, u, v, model, w=None, freq=None, dft_sub=None, isic=False,
+              kernel='SLS'):
     """
     Gradient update stencil
 
@@ -40,12 +41,16 @@ def grad_expr(gradm, u, v, model, w=None, freq=None, dft_sub=None, isic=False):
         Whether or not to use inverse scattering imaging condition (not supported yet)
     """
     ic_func = ic_dict[func_name(freq=freq, isic=isic)]
-    expr = ic_func(as_tuple(u), as_tuple(v), model, freq=freq, factor=dft_sub, w=w)
+    expr = ic_func(as_tuple(u), as_tuple(v), model, freq=freq, factor=dft_sub, w=w,
+                   kernel=kernel)
     if model.fs:
         eq_g = [Eq(gradm, gradm - expr, subdomain=model.grid.subdomains['nofsdomain'])]
         eq_g += freesurface(model, eq_g)
     else:
-        eq_g = [Eq(gradm, gradm - expr)]
+        if model.is_viscoacoustic:
+            eq_g = [Eq(gradm, gradm + expr)]
+        else:
+            eq_g = [Eq(gradm, gradm - expr)]
     return eq_g
 
 
@@ -62,6 +67,9 @@ def crosscorr_time(u, v, model, **kwargs):
     model: Model
         Model structure
     """
+    if model.is_viscoacoustic:
+        return u[0].dt * v[0].dt
+
     w = kwargs.get('w') or u[0].indices[0].spacing * model.irho
     return w * sum(vv.dt2 * uu for uu, vv in zip(u, v))
 
@@ -222,6 +230,33 @@ def inner_grad(u, v):
         Second wavefield
     """
     return sum([a*b for a, b in zip(grads(u, so_fact=2), grads(v, so_fact=2))])
+
+def born_q(model, u, time_order, kernel):
+    """
+    Source for linearized modeling
+
+    Parameters
+    ----------
+    u: TimeFunction or Tuple
+        Forward wavefield (tuple of fields for TTI or dft)
+    model: Model
+        Model containing the perturbation dm
+    """
+    s = model.grid.stepping_dim.spacing
+    dm = model.dm
+
+    if time_order == 1:
+        if kernel == 'SLS':
+            q = -dm * (u[0].forward - u[0]) / s
+        else:
+            q = -dm * (u.forward - u) / s
+    else:
+        if kernel == 'SLS':
+            q = -dm * (u[0].forward - 2 * u[0] + u[0].backward) / (s**2)
+        else:
+            q = -dm * (u.forward - 2 * u + u.backward) / (s**2)
+
+    return q
 
 
 ic_dict = {'isic_freq': isic_freq, 'corr_freq': crosscorr_freq,

@@ -4,7 +4,7 @@ from devito.types import SparseTimeFunction
 import numpy as np
 
 
-__all__ = ['PointSource', 'Receiver', 'RickerSource', 'TimeAxis']
+__all__ = ['PointSource', 'Receiver', 'RickerSource', 'TimeAxis', 'DGaussSource']
 
 
 class TimeAxis(object):
@@ -100,6 +100,8 @@ class PointSource(SparseTimeFunction):
         except KeyError:
             kwargs['nt'] = kwargs.get('time').shape[0]
 
+        # nt_dgauss = kwargs.get('ntime', 1)
+        # tn_dgauss = kwargs.get('timen', 1)
         # Either `npoint` or `coordinates` must be provided
         npoint = kwargs.get('npoint')
         if npoint is None:
@@ -154,3 +156,85 @@ class RickerSource(PointSource):
         a = self.a or 1
         r = (np.pi * self.f0 * (timev - t0))
         return a * (1-2.*r**2)*np.exp(-r**2)
+
+class DGaussSource(PointSource):
+    """
+    Symbolic object that encapsulate a set of sources with a
+    pre-defined Ricker wavelet:
+    http://subsurfwiki.org/wiki/Ricker_wavelet
+    name: Name for the resulting symbol
+    grid: :class:`Grid` object defining the computational domain.
+    f0: Peak frequency for Ricker wavelet in kHz
+    time: Discretized values of time in ms
+    """
+    @classmethod
+    def __args_setup__(cls, *args, **kwargs):
+        kwargs.setdefault('npoint', 1)
+
+        return super(DGaussSource, cls).__args_setup__(*args, **kwargs)
+
+    def __init_finalize__(self, *args, **kwargs):
+        super(DGaussSource, self).__init_finalize__(*args, **kwargs)
+
+        self.f0 = kwargs.get('f0')
+        self.a = kwargs.get('a')
+        self.t0 = kwargs.get('t0')
+        self.tn = kwargs.get('tn')
+        for p in range(kwargs['npoint']):
+            self.data[:, p] = self.wavelet(kwargs.get('time'))
+
+    def wavelet(self, timev):
+        """
+        Returns the 1st derivative of a Gaussian wavelet.
+
+        Parameters
+        ----------
+        f0 : float
+            Peak frequency in kHz.
+        t : TimeAxis
+            Discretized values of time in ms.
+        a : float
+            Maximum amplitude.
+        """
+        t0 = self.t0 or 1 / self.f0
+        a = self.a or 1
+        r = (np.pi * self.f0 * (timev - t0))
+        tmp = a * (1-2.*r**2)*np.exp(-r**2)
+        # tn = self.tn
+        tn = self.tn
+        nt = timev.shape[0]
+        return self.dgauss_process(tmp, tn, nt)
+
+    def dgauss_process(self, tmp, tn, nt):
+        """
+        Returns the 1st derivative of a Gaussian wavelet.
+
+        Parameters
+        ----------
+        f0 : float
+            Peak frequency in kHz.
+        t : TimeAxis
+            Discretized values of time in ms.
+        a : float
+            Maximum amplitude.
+        """
+        nf = int(((nt*20)+1)/2 + 1)
+        df = 1.0 / tn
+        faxis = df * np.arange(nf)
+        wavelet = tmp
+
+        # Take the Fourier transform of the source time-function
+        R = np.fft.fft(wavelet)
+        R = R[0:nf]
+        nf = len(R)
+
+        # Compute the Hankel function and multiply by the source spectrum
+        U_a = np.zeros((nf), dtype=complex)
+        for a in range(1, nf-1):
+
+            U_a[a] = R[a]*(1./(-1j*faxis[a]))
+
+            # Do inverse fft on 0:dt:T and you have analytical solution
+        U_t = 1.0/(2.0 * np.pi) * np.real(np.fft.ifft(U_a[:], nt))
+        U_t = U_t/np.max(U_t)
+        return U_t[0:nt]

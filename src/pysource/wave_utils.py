@@ -1,13 +1,14 @@
 import numpy as np
 from sympy import cos, sin, sign
 
-from devito import (TimeFunction, Function, Inc, DefaultDimension,
-                    Eq, ConditionalDimension, Dimension)
+from devito import (VectorTimeFunction, TimeFunction, Function, Inc, DefaultDimension,
+                    Eq, ConditionalDimension, Dimension, NODE)
 from devito.tools import as_tuple
 from devito.symbolics import retrieve_functions, INT
 
 
-def wavefield(model, space_order, save=False, nt=None, fw=True, name='', t_sub=1):
+def wavefield(model, space_order, time_order=2, save=False, nt=None, fw=True,
+              name='', t_sub=1, kernel=None):
     """
     Create the wavefield for the wave equation
 
@@ -36,6 +37,29 @@ def wavefield(model, space_order, save=False, nt=None, fw=True, name='', t_sub=1
         v = TimeFunction(name="%s2" % name, grid=model.grid, time_order=2,
                          space_order=space_order, save=None if not save else nt)
         return (u, v)
+    elif model.is_viscoacoustic:
+        name_r = "r"+name
+        name_w = "w"+name
+        u = TimeFunction(name=name, grid=model.grid, time_order=time_order,
+                         space_order=space_order, save=None if not save else nt,
+                         staggered=NODE)
+        if kernel == 'SLS':
+            r = TimeFunction(name=name_r, grid=model.grid, time_order=time_order,
+                            space_order=space_order, save=None if not save else nt,
+                            staggered=NODE)
+        if time_order == 1:
+            w = VectorTimeFunction(name=name_w, grid=model.grid,
+                                   save=None if not save else nt, space_order=space_order,
+                                   time_order=time_order)
+            if kernel == 'SLS':
+                return (u, r, w)
+            else:
+                return (u, w)
+
+        if kernel == 'SLS':
+            return (u, r)
+        else:
+            return (u)
     else:
         return TimeFunction(name=name, grid=model.grid, time_order=2,
                             space_order=space_order, save=None if not save else nt)
@@ -76,7 +100,7 @@ def wavefield_subsampled(model, u, nt, t_sub, space_order=8):
     return wf_s, eq_save
 
 
-def wf_as_src(v, w=1, freq_list=None):
+def wf_as_src(model, v, w=1, freq_list=None):
     """
     Weighted source as a time-space wavefield
 
@@ -88,6 +112,8 @@ def wf_as_src(v, w=1, freq_list=None):
         Weight for the source expression (default=1)
     """
     v = idft(v, freq=freq_list) if freq_list is not None else as_tuple(v)
+    if model.is_viscoacoustic:
+        return w * v[0]
     if len(v) == 2:
         return (w * v[0], w * v[1])
     return w * v[0]
@@ -121,7 +147,10 @@ def extented_src(model, weight, wavelet, q=0):
     source_weight.data[:] = weight
     if model.is_tti:
         return (q[0] + source_weight * wavelett, q[1] + source_weight * wavelett)
-    return q + source_weight * wavelett
+    elif model.is_viscoacoustic:
+        return q[0] + source_weight * wavelett
+    else:
+        return q + source_weight * wavelett
 
 
 def extended_src_weights(model, wavelet, v):
@@ -271,7 +300,7 @@ def sub_time(time, factor, dt=1, freq=None):
     if factor == 1:
         return time, factor
     elif freq is not None:
-        factor = factor or max([1, int(1 / (dt*4*np.max(freq)))])
+        factor = factor or int(1 / (dt*4*np.max(freq)))
         return ConditionalDimension(name='tsave', parent=time, factor=factor), factor
     elif factor is not None:
         return ConditionalDimension(name='tsave', parent=time, factor=factor), factor

@@ -3,7 +3,8 @@ from devito.tools import as_tuple
 from sources import *
 
 
-def src_rec(model, u, src_coords=None, rec_coords=None, wavelet=None, fw=True, nt=None):
+def src_rec(model, u, src_coords=None, rec_coords=None, wavelet=None, fw=True, nt=None,
+            time_order=2, kernel=None):
     """
     Generates the source injection and receiver interpolation.
     This function is fully abstracted and does not care whether this is a
@@ -32,8 +33,10 @@ def src_rec(model, u, src_coords=None, rec_coords=None, wavelet=None, fw=True, n
     nt: int
         Number of time steps
     """
-    m, irho = model.m, model.irho
-    m = m * irho
+    # m, irho = model.m, model.irho
+    # m = m * irho
+    m = model.m
+
     dt = model.grid.time_dim.spacing
     geom_expr = []
     src = None
@@ -47,13 +50,15 @@ def src_rec(model, u, src_coords=None, rec_coords=None, wavelet=None, fw=True, n
                               coordinates=src_coords)
             src.data[:] = wavelet[:] if wavelet is not None else 0.
         u_n = as_tuple(u)[0].forward if fw else as_tuple(u)[0].backward
-        geom_expr += src.inject(field=u_n, expr=src*dt**2/m)
+        scale = dt / m if time_order == 1 else dt**2 / m
+        geom_expr += src.inject(field=u_n, expr=src*scale)
     # Setup adjoint wavefield sampling at source locations
     rcv = None
     if rec_coords is not None:
         rcv = Receiver(name="rcv%s" % namef, grid=model.grid, ntime=nt,
                        coordinates=rec_coords)
-        rec_expr = u[0] if model.is_tti else u
+        rec_expr = \
+            u[0] if (model.is_tti or (model.is_viscoacoustic and (kernel == 'SLS')) or (time_order == 1)) else u
         adj_rcv = rcv.interpolate(expr=rec_expr)
         geom_expr += adj_rcv
     return geom_expr, src, rcv

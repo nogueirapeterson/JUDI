@@ -82,8 +82,8 @@ function PhysicalParameter(v::vDT, n::Tuple, d::Tuple, o::Tuple) where vDT<:Numb
     return PhysicalParameter{vDT}(n, d, o, v)
 end
 
-PhysicalParameter(p::PhysicalParameter, n::Tuple, d::Tuple, o::Tuple) = p 
-PhysicalParameter(p::PhysicalParameter) = p 
+PhysicalParameter(p::PhysicalParameter, n::Tuple, d::Tuple, o::Tuple) = p
+PhysicalParameter(p::PhysicalParameter) = p
 
 # transpose and such.....
 conj(x::PhysicalParameter{vDT}) where vDT = x
@@ -299,18 +299,22 @@ end
 
 function Model(n::IntTuple, d::RealTuple, o::RealTuple, m;
                epsilon=nothing, delta=nothing, theta=nothing,
-               phi=nothing, rho=nothing, nb=40)
+               phi=nothing, rho=nothing, qp=nothing, nb=40)
 
     params = Dict(:m => PhysicalParameter(Float32.(m), d, o))
-    for (name, val)=zip([:rho, :epsilon, :delta, :theta, :phi], [rho, epsilon, delta, theta, phi])
+    for (name, val)=zip([:rho, :qp, :epsilon, :delta, :theta, :phi], [rho, qp, epsilon, delta, theta, phi])
         ~isnothing(val) && (params[name] = PhysicalParameter(Float32.(val), n, d, o))
     end
-    
+
     return Model(n, d, o, nb, params)
 end
 
 function Model(n::IntTuple, d::RealTuple, o::RealTuple, m, rho; nb=40)
     return Model(n, d, o, m; rho=rho, nb=nb)
+end
+
+function Model(n::IntTuple, d::RealTuple, o::RealTuple, m, rho, qp; nb=40)
+    return Model(n, d, o, m; rho=rho, qp=qp, nb=nb)
 end
 
 get_dt(m::Model; dt=nothing) = calculate_dt(m; dt=dt)

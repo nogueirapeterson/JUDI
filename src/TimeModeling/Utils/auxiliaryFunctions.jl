@@ -5,7 +5,7 @@
 # Mathias Louboutin, mlouboutin3@gatech.edu
 # Updated July 2020
 
-export ricker_wavelet, get_computational_nt, calculate_dt, setup_grid, setup_3D_grid
+export ricker_wavelet, dgauss_wavelet, get_alfa, get_computational_nt, calculate_dt, setup_grid, setup_3D_grid
 export convertToCell, limit_model_to_receiver_area, extend_gradient, remove_out_of_bounds_receivers
 export time_resample, remove_padding, subsample, process_input_data
 export generate_distribution, select_frequencies
@@ -28,7 +28,7 @@ function devito_model(model::Model, options::Options; dm=nothing)
     m = pad_array(model[:m].data, pad)
     !isnothing(dm) && (dm = pad_array(reshape(getattr(dm, :data, dm), model.n), pad))
     physpar = Dict((n, pad_array(v.data, pad)) for (n, v) in model.params if n != :m)
-    modelPy = pm."Model"(model.o, model.d, model.n, m, fs=options.free_surface,
+    modelPy = pm."Model"(model.o, model.d, model.n, m, fs=options.free_surface, abc_type=options.abc_type,
                          nbl=model.nb, space_order=options.space_order, dt=options.dt_comp, dm=dm;
                          physpar...)
     return modelPy
@@ -110,7 +110,7 @@ end
 Crops the `model` to the area of the source an receiver with an extra buffer. This reduces the size
 of the problem when the model si large and the source and receiver located in a small part of the domain.
 
-In the cartoon below, the full model will be cropped to the center area containg the source (o) receivers (x) and 
+In the cartoon below, the full model will be cropped to the center area containg the source (o) receivers (x) and
 buffer area (*)
 
 --------------------------------------------
@@ -118,7 +118,7 @@ buffer area (*)
 | . . . . . . . . . . . . . . . . . . . . . |  - o Source position
 | . . . . * * * * * * * * * * * * . . . . . |  - x receiver positions
 | . . . . * x x x x x x x x x x * . . . . . |  - * Extra buffer (grid spacing in that simple case)
-| . . . . * x x x x x x x x x x * . . . . . | 
+| . . . . * x x x x x x x x x x * . . . . . |
 | . . . . * x x x x x x x x x x * . . . . . |
 | . . . . * x x x x x o x x x x * . . . . . |
 | . . . . * x x x x x x x x x x * . . . . . |
@@ -221,7 +221,7 @@ Parameters
 function remove_out_of_bounds_receivers(recGeometry::Geometry, model::Model)
 
     # Only keep receivers within the model
-    xmin, xmax = model.o[1], model.o[1] + (model.n[1] - 1)*model.d[1] 
+    xmin, xmax = model.o[1], model.o[1] + (model.n[1] - 1)*model.d[1]
     if typeof(recGeometry.xloc[1]) <: Array
         idx_xrec = findall(x -> xmax >= x >= xmin, recGeometry.xloc[1])
         recGeometry.xloc[1] = recGeometry.xloc[1][idx_xrec]
@@ -230,7 +230,7 @@ function remove_out_of_bounds_receivers(recGeometry::Geometry, model::Model)
 
     # For 3D shot records, scan also y-receivers
     if length(model.n) == 3 && typeof(recGeometry.yloc[1]) <: Array
-        ymin, ymax = model.o[2], model.o[2] + (model.n[2] - 1)*model.d[2] 
+        ymin, ymax = model.o[2], model.o[2] + (model.n[2] - 1)*model.d[2]
         idx_yrec = findall(x -> ymax >= x >= ymin, recGeometry.yloc[1])
         recGeometry.yloc[1] = recGeometry.yloc[1][idx_yrec]
         recGeometry.zloc[1] = recGeometry.zloc[1][idx_yrec]
@@ -316,6 +316,57 @@ function ricker_wavelet(tmax, dt, f0; t0=nothing)
 end
 
 """
+    source(tmax, dt, f0)
+
+Create seismic DGauss wavelet of length `tmax` (in milliseconds) with sampling interval `dt` (in milliseonds)\\
+and central frequency `f0` (in kHz).
+
+"""
+function dgauss_wavelet(tmax, dt, f0; t0=nothing)
+    t = collect(0.0:dt:tmax);
+    t = t ./ 1000.
+    f1 = f0 .* 1000
+    wav = WaveletCausalRicker(a = 1.0, f = f1, integrate = true);
+    wRickerInt = get(wav, t .- mean(t));
+    nt = Int(tmax ÷ dt) + 1;
+    q = zeros(Float32,nt,1);
+    wRickerInt = -1 .* wRickerInt;
+    q[:,1] = wRickerInt;
+    return q
+end
+
+"""
+    source(tmax, dt, f0)
+
+Create seismic DGauss wavelet of length `tmax` (in milliseconds) with sampling interval `dt` (in milliseonds)\\
+and central frequency `f0` (in kHz).
+
+"""
+function get_alfa(sk, yk, gk, j)
+    term1 = dot(sk, sk)
+    term2 = dot(sk, yk)
+    term3 = dot(yk, yk)
+
+    if j == 1
+        t = .05f0 / maximum(gk)
+    else
+        abb1 = term1 / term2
+        abb2 = term2 / term3
+        abb3 = abb2 / abb1
+        if (abb3 > 0) && (abb3 < 1)
+            t = abb2
+        else
+            t = abb1
+        end
+    end
+
+    return t
+
+end
+
+
+
+"""
     calculate_dt(model; dt=nothing)
 
 Compute the computational time step based on the CFL condition and physical parameters
@@ -389,7 +440,7 @@ end
 """
     setup_grid(geometry, n)
 
-Sets up the coordinate arrays for Devito. 
+Sets up the coordinate arrays for Devito.
 
 Parameters:
 * `geometry`: Geometry containing the coordinates
@@ -415,7 +466,7 @@ function setup_grid(geometry, n)
 end
 
 """
-    setup_3D_grid(x, y, z)  
+    setup_3D_grid(x, y, z)
 
 Converts one dimensional input (x, y, z) into three dimensional coordinates. The number of point created
 is `length(x)*lenght(y)` with all the x/y pairs and each pair at depth z[idx[x]]. `x` and `z` must have the same size.
@@ -454,7 +505,7 @@ function setup_3D_grid(xrec::Vector{<:AbstractVector{T}},yrec::Vector{<:Abstract
 end
 
 """
-    setup_3D_grid(x, y, z)  
+    setup_3D_grid(x, y, z)
 
 Converts one dimensional input (x, y, z) into three dimensional coordinates. The number of point created
 is `length(x)*lenght(y)` with all the x/y pairs and each pair at same depth z.
@@ -493,7 +544,7 @@ end
 """
     time_resample(data, geometry_in, dt_new)
 
-Resample the input data with sinc interpolation from the current time sampling (geometrty_in) to the 
+Resample the input data with sinc interpolation from the current time sampling (geometrty_in) to the
 new time sampling `dt_new`.
 
 Parameters
@@ -521,7 +572,7 @@ end
 """
     time_resample(data, dt_in, geometry_in)
 
-Resample the input data with sinc interpolation from the current time sampling (dt_in) to the 
+Resample the input data with sinc interpolation from the current time sampling (dt_in) to the
 new time sampling `geometry_out`.
 
 Parameters

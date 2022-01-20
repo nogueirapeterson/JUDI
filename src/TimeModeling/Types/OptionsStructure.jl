@@ -8,7 +8,9 @@ export Options, subsample
 # Object for velocity/slowness models
 mutable struct Options
     space_order::Integer
+    time_order::Integer
     free_surface::Bool
+    abc_type::Bool
     limit_m::Bool
     buffer_size::Real
     save_data_to_disk::Bool
@@ -29,7 +31,9 @@ end
 """
     Options
         space_order::Integer
+        time_order::Integer
         free_surface::Bool
+        abc_type::Bool
         limit_m::Bool
         buffer_size::Real
         save_rate::Real
@@ -102,7 +106,9 @@ All arguments are optional keyword arguments with the following default values:
 
 """
 Options(;space_order=8,
+         time_order=1,
 		 free_surface=false,
+         abc_type=true,
          limit_m=false,
 		 buffer_size=1e3,
 		 save_data_to_disk=false,
@@ -119,7 +125,9 @@ Options(;space_order=8,
          return_array=false,
          dt_comp=nothing) =
 		 Options(space_order,
+                 time_order,
 		 		 free_surface,
+                 abc_type,
 		         limit_m,
 				 buffer_size,
 				 save_data_to_disk,
